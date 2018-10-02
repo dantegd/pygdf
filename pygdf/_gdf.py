@@ -302,8 +302,6 @@ def libgdf_join(col_lhs, col_rhs, on, how, method='sort'):
         result_col_names.append(name)
         left_idx.append(list(col_lhs.keys()).index(name))
         right_idx.append(list(col_rhs.keys()).index(name))
-        print(left_idx)
-        print(right_idx)
 
     # idx = 0
     for name, col in col_rhs.items():
