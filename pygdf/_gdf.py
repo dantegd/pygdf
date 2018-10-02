@@ -285,31 +285,35 @@ def libgdf_join(col_lhs, col_rhs, on, how, method='sort'):
     result_col_names = []
 
     left_idx = []
-    idx = 0
+    right_idx = []
+    # idx = 0
     for name, col in col_lhs.items():
         list_lhs.append(col._column.cffi_view)
         if name not in on:
             result_cols.append(columnview(0, None, dtype=col._column.dtype))
             result_col_names.append(name)
-        else:
-            left_idx.append(idx)
-        idx = idx + 1
+        # else:
+        #     left_idx.append(idx)
+        # idx = idx + 1
 
     for name in on:
         result_cols.append(columnview(0, None,
-                                      dtype=col_lhs[name]._column.dtype))
+                                      dtype=col_rhs[name]._column.dtype))
         result_col_names.append(name)
+        left_idx.append(list(col_lhs.keys()).index(name))
+        right_idx.append(list(col_rhs.keys()).index(name))
+        print(left_idx)
+        print(right_idx)
 
-    right_idx = []
-    idx = 0
+    # idx = 0
     for name, col in col_rhs.items():
         list_rhs.append(col._column.cffi_view)
         if name not in on:
             result_cols.append(columnview(0, None, dtype=col._column.dtype))
             result_col_names.append(name)
-        else:
-            right_idx.append(idx)
-        idx = idx + 1
+        # else:
+        #     right_idx.append(idx)
+        # idx = idx + 1
 
     num_cols_to_join = len(on)
     result_num_cols = len(list_lhs) + len(list_rhs) - num_cols_to_join
@@ -340,6 +344,7 @@ def libgdf_join(col_lhs, col_rhs, on, how, method='sort'):
                                          nelem=calc_chunk_size(col.size,
                                                                mask_bitsize),
                                          dtype=mask_dtype))
+
 
     return res, valids
 
