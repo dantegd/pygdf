@@ -3,6 +3,7 @@
 from __future__ import print_function, division
 
 import inspect
+import random
 from collections import OrderedDict
 
 import numpy as np
@@ -18,6 +19,7 @@ from .series import Series
 from .column import Column
 from .settings import NOTSET, settings
 from .serialize import register_distributed_serializer
+from .categorical import CategoricalColumn
 
 
 class DataFrame(object):
@@ -664,7 +666,7 @@ class DataFrame(object):
         return df.set_index(self.index.take(new_positions))
 
     def merge(self, other, on=None, how='left', lsuffix='_x', rsuffix='_y',
-              type='sort'):
+              type='sort', method='hash'):
         """Merge GPU DataFrame objects by performing a database-style join operation
         by columns or indexes.
 
@@ -705,6 +707,7 @@ class DataFrame(object):
             raise NotImplementedError('{!r} join not supported yet'
                                       .format(how))
 
+        # return self._merge_gdf(other, on, how, lsuffix, rsuffix, False, method)
         same_names = set(self.columns) & set(other.columns)
         if same_names and not (lsuffix or rsuffix):
             raise ValueError('there are overlapping columns but '
@@ -713,7 +716,8 @@ class DataFrame(object):
         lhs = self
         rhs = other
 
-        cols, valids = _gdf.libgdf_join(lhs._cols, rhs._cols, on, how)
+        cols, valids = _gdf.libgdf_join(lhs._cols, rhs._cols, on, how,
+                                        method=method)
 
         df = DataFrame()
 
@@ -748,53 +752,8 @@ class DataFrame(object):
 
         return df
 
-    def _merge_gdf(self, left, right, left_on, right_on, how, return_indices):
+    # def _merge_gdf(self, other, on, how, lsuffix, rsuffix, from_join, method):
 
-        from pygdf import cudautils
-
-        assert how == 'left'
-        assert return_indices
-        assert len(left_on) == len(right_on)
-
-        left_cols = []
-        for l in left_on:
-            left_cols.append(left[l]._column)
-
-        right_cols = []
-        for r in right_on:
-            right_cols.append(right[r]._column)
-
-        joined_indices = []
-        with _gdf.apply_join(left_cols, right_cols, how) as (left_indices,
-                                                             right_indices):
-            if left_indices.size > 0:
-                # For each column we joined on, gather the values from each
-                # column using the indices from the join
-                joined_values = []
-
-                for i in range(len(left_on)):
-                    # TODO Instead of calling 'gather_joined_index' for every
-                    # column that we are joining on, we should implement a
-                    # 'multi_gather_joined_index' that can gather a value from
-                    # each column at once
-                    raw_values = cudautils.gather_joined_index(
-                        left_cols[i].to_gpu_array(),
-                        right_cols[i].to_gpu_array(),
-                        left_indices,
-                        right_indices,
-                    )
-                    buffered_values = Buffer(raw_values)
-
-                    joined_values.append(left_cols[i]
-                                         .replace(data=buffered_values))
-
-                joined_indices = (cudautils.copy_array(left_indices),
-                                  cudautils.copy_array(right_indices))
-
-        if return_indices:
-            return joined_values, joined_indices
-        else:
-            return joined_indices
 
     def join(self, other, on=None, how='left', lsuffix='', rsuffix='',
              sort=False, method='hash'):
@@ -823,6 +782,97 @@ class DataFrame(object):
         - *other* must be a single DataFrame for now.
         - *on* is not supported yet due to lack of multi-index support.
         """
+
+        if how == 'outer':
+            return self._py_join(other, on=None, how='outer', lsuffix=lsuffix,
+                                 rsuffix=rsuffix, sort=False, method='hash')
+        if how not in ['left', 'right', 'inner']:
+            raise NotImplementedError('unsupported {!r} join'.format(how))
+        # if on is not None:
+        #     raise NotImplementedError('"on" is not supported yet')
+
+        if how == 'right':
+            # libgdf doesn't support right join directly, we will swap the
+            # dfs and use left join
+            return other.join(self, other, how='left', lsuffix=rsuffix,
+                              rsuffix=lsuffix, sort=sort, method='hash')
+
+        same_names = set(self.columns) & set(other.columns)
+        if same_names and not (lsuffix or rsuffix):
+            raise ValueError('there are overlapping columns but '
+                             'lsuffix and rsuffix are not defined')
+
+        idx_col_name = str(random.randint(1, 2**63))
+
+        while idx_col_name in self.columns or idx_col_name in other.columns:
+            idx_col_name = str(random.randint(2**29, 2**31))
+
+        self[idx_col_name] = Series(self.index.as_column()).set_index(self.index)
+        other[idx_col_name] = Series(other.index.as_column()).set_index(other.index)
+
+        self = self.reset_index()
+        other = other.reset_index()
+
+        # cat_join = False
+
+        # if pd.core.common.is_categorical_dtype(self[idx_col_name]):
+        #     cat_join = True
+        #     lcats = self[idx_col_name].cat.categories
+        #     rcats = other[idx_col_name].cat.categories
+        #     if how == 'left':
+        #         cats = lcats
+        #         other[idx_col_name] = other[idx_col_name].cat.set_categories(cats).fillna(-1)
+        #     elif how == 'right':
+        #         cats = rcats
+        #         self[idx_col_name] = self[idx_col_name].cat.set_categories(cats).fillna(-1)
+        #     elif how in ['inner', 'outer']:
+        #         # Do the join using the union of categories from both side.
+        #         # Adjust for inner joins afterwards
+        #         cats = sorted(set(lcats) | set(rcats))
+
+        #         self[idx_col_name] = self[idx_col_name].cat.set_categories(cats).fillna(-1)
+        #         self[idx_col_name] = self[idx_col_name]._column.as_numerical
+
+        #         other[idx_col_name] = other[idx_col_name].cat.set_categories(cats).fillna(-1)
+        #         other[idx_col_name] = other[idx_col_name]._column.as_numerical
+
+        df = self.merge(other, on=[idx_col_name], how=how, lsuffix="l",
+                        rsuffix="r", method=method)
+
+        # if cat_join:
+        #     df[idx_col_name] = CategoricalColumn(data=df[idx_col_name].data, categories=cats, dtype='categorical', ordered=False)
+
+        df = df.set_index(idx_col_name)
+        self.set_index(self[idx_col_name])
+        other.set_index(other[idx_col_name])
+
+        if sort and len(df):
+            return df.sort_index()
+
+        return df
+
+    def _py_join(self, other, on=None, how='left', lsuffix='', rsuffix='',
+                 sort=False, method='hash'):
+        """Join columns with other DataFrame on index or on a key column.
+        Parameters
+        ----------
+        other : DataFrame
+        how : str
+            Only accepts "left", "right", "inner", "outer"
+        lsuffix, rsuffix : str
+            The suffices to add to the left (*lsuffix*) and right (*rsuffix*)
+            column names when avoiding conflicts.
+        sort : bool
+            Set to True to ensure sorted ordering.
+        Returns
+        -------
+        joined : DataFrame
+        Notes
+        -----
+        Difference from pandas:
+        - *other* must be a single DataFrame for now.
+        - *on* is not supported yet due to lack of multi-index support.
+        """
         if how not in ['left', 'right', 'inner', 'outer']:
             raise NotImplementedError('unsupported {!r} join'.format(how))
         if on is not None:
@@ -832,8 +882,6 @@ class DataFrame(object):
         if same_names and not (lsuffix or rsuffix):
             raise ValueError('there are overlapping columns but '
                              'lsuffix and rsuffix are not defined')
-
-        # call libgdf new for how in left and inner, joining on index
 
         return self._join(other=other, how=how, lsuffix=lsuffix,
                           rsuffix=rsuffix, sort=sort, same_names=same_names,

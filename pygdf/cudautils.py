@@ -5,7 +5,7 @@ import numpy as np
 from numba import cuda, int32, numpy_support
 from math import isnan
 
-from .utils import mask_bitsize, mask_get, mask_set, make_mask
+from .utils import mask_bitsize, mask_get, mask_set, make_mask, mask_clear
 
 
 def optimal_block_count(minblkct):
@@ -295,6 +295,24 @@ def mask_from_devary(ary):
     bits = make_mask(len(ary))
     gpu_fill_value.forall(bits.size)(bits, 0)
     gpu_mask_from_devary.forall(bits.size)(ary, bits)
+    return bits
+
+
+@cuda.jit
+def gpu_mask_non_null(ary, bits, size):
+    tid = cuda.grid(1)
+    base = tid * mask_bitsize
+    for i in range(base, base + mask_bitsize):
+        if i > len(ary):
+            mask_clear(bits, i)
+
+
+def mask_non_null(ary):
+    size = len(ary.mem)
+    bits = make_mask(size)
+    if size > 0:
+        gpu_fill_value.forall(bits.size)(bits, 255)
+        gpu_mask_non_null.forall(bits.size)(ary.mem, bits, size)
     return bits
 
 #
@@ -707,3 +725,9 @@ def row_matrix(cols, nrow, ncol, dtype):
                                                       col.to_gpu_array(),
                                                       nrow, ncol)
     return matrix
+
+def count_nonzero_mask(mask, size):
+    assert mask.size * mask_bitsize >= size
+    # TODO: this needs optimization
+    _, nnz = mask_assign_slot(size, mask)
+    return nnz

@@ -34,6 +34,10 @@ def mask_get(mask, pos):
 def mask_set(mask, pos):
     mask[pos // mask_bitsize] |= 1 << (pos % mask_bitsize)
 
+@njit
+def mask_clear(mask, pos):
+    mask[pos // mask_bitsize] |= 0 << (pos % mask_bitsize)
+
 
 def make_mask(size):
     """Create mask to obtain at least *size* number of bits.

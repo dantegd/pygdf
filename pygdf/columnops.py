@@ -157,6 +157,7 @@ def as_column(arbitrary):
             data = datetime.DatetimeColumn.from_numpy(arbitrary)
         else:
             data = as_column(Buffer(arbitrary))
+            # print(arbitrary)
             if np.count_nonzero(np.isnan(arbitrary)) > 0:
                 mask = ~np.isnan(arbitrary)
                 data = data.set_mask(cudautils.compact_mask_bytes(mask))
