@@ -7,6 +7,8 @@ from .numerical import NumericalColumn
 from .dataframe import DataFrame
 from .datetime import DatetimeColumn
 
+import time
+
 
 def _wrap_string(text):
     if(text is None):
@@ -72,6 +74,8 @@ def read_csv(filepath, lineterminator='\n',
 #              skipinitialspace=False, names=None, dtype=None,
 #              skipfooter=0, skiprows=0, dayfirst=False):
 
+    t0 = time.time()
+
     if names is None or dtype is None:
         msg = '''Automatic dtype detection not implemented:
         Column names and dtypes must be specified.'''
@@ -118,14 +122,20 @@ def read_csv(filepath, lineterminator='\n',
     csv_reader.skiprows = skiprows
     csv_reader.skipfooter = skipfooter
 
+    t1 = time.time()
+
     # Call read_csv
     libgdf.read_csv(csv_reader)
+
+    t2 = time.time()
 
     out = csv_reader.data
     if out == ffi.NULL:
         raise ValueError("Failed to parse CSV")
 
     # Extract parsed columns
+
+
 
     outcols = []
     for i in range(csv_reader.num_cols_out):
@@ -135,9 +145,18 @@ def read_csv(filepath, lineterminator='\n',
         else:
             outcols.append(newcol.view(NumericalColumn, dtype=newcol.dtype))
 
+    t3 = time.time()
+
     # Build dataframe
     df = DataFrame()
     for k, v in zip(names, outcols):
         df[k] = v
+
+    t4= time.time()
+
+    print("preparation: ", t1-t0)
+    print("call to libgdf: ", t2-t1)
+    print("column building: ", t3-t2)
+    print("dataframe building: ", t4-t3)
 
     return df
